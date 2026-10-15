@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ระบบจองโรงจอดรถ</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f4fd8'/%3E%3Ctext x='16' y='23' font-size='20' font-weight='700' text-anchor='middle' fill='white' font-family='Arial'%3EP%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="brand-mark">P</span><span>โรงจอดรถ <small>หน้าเว็บทดสอบ</small></span></div>
+    <nav id="nav" aria-label="เมนูหลัก"></nav>
+    <div class="top-right">
+      <div class="clock" id="clock" title="เวลาของระบบ"></div>
+      <div id="authBox"></div>
+    </div>
+  </header>
+
+  <div id="notice" class="notice" hidden></div>
+  <main id="view" aria-live="polite"></main>
+
+  <dialog id="authDialog">
+    <form id="authForm" autocomplete="on">
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab on" data-mode="login">เข้าสู่ระบบ</button>
+        <button type="button" class="tab" data-mode="register">สมัครสมาชิก</button>
+      </div>
+      <div class="reg-only">
+        <label>ชื่อ<input name="name" autocomplete="name"></label>
+        <label>เบอร์โทร<input name="phone" autocomplete="tel"></label>
+        <label>ทะเบียนรถ<input name="plate" placeholder="เช่น 1กก 1234"></label>
+      </div>
+      <label>อีเมล<input name="email" type="email" required autocomplete="email"></label>
+      <label>รหัสผ่าน<input name="password" type="password" required minlength="6" autocomplete="current-password"></label>
+      <p class="form-error" id="authError" role="alert"></p>
+      <div class="row end">
+        <button type="button" class="btn ghost" id="authCancel">ปิด</button>
+        <button class="btn primary" id="authSubmit">เข้าสู่ระบบ</button>
+      </div>
+      <div class="demo-users" id="demoUsers">
+        <span>บัญชีทดลอง:</span>
+        <button type="button" data-e="demo1@parking.test" data-p="demo1234">สมาชิก 1</button>
+        <button type="button" data-e="demo2@parking.test" data-p="demo1234">สมาชิก 2</button>
+        <button type="button" data-e="admin@parking.test" data-p="admin1234">ผู้ดูแล</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>

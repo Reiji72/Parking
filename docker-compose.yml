@@ -1,0 +1,16 @@
+# ถ้ายังไม่มี PostgreSQL ในเครื่อง:  docker compose up -d
+services:
+  db:
+    image: postgres:16
+    container_name: parking-db
+    environment:
+      POSTGRES_USER: parking
+      POSTGRES_PASSWORD: parking
+      POSTGRES_DB: parking
+    ports:
+      - "5432:5432"
+    volumes:
+      - parking-data:/var/lib/postgresql/data
+
+volumes:
+  parking-data:
