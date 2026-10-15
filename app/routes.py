@@ -138,6 +138,7 @@ def kiosk_exit():
 @auth.require_admin
 def admin_overview():
     rules.sweep_no_shows()
+    cfg = rules.get_config()
     members = db.query(
         """SELECT m.member_id, m.name, m.email, m.status,
                   count(p.*) FILTER (WHERE p.type = 'YELLOW'  AND p.status = 'ACTIVE')::int AS yellow_active,
@@ -155,8 +156,32 @@ def admin_overview():
         """SELECT (SELECT count(*) FROM parking_session WHERE exit_time IS NULL)::int AS parked_now,
                   (SELECT count(*) FROM reservation WHERE status = 'BOOKED')::int      AS booked_now,
                   (SELECT count(*) FROM member WHERE status = 'SUSPENDED')::int        AS suspended""")
+    parked = db.query(
+        """SELECT ps.session_id, ps.slot_id, sl.label AS slot_label, ps.plate, ps.ticket_code,
+                  ps.entry_time, ps.reservation_id,
+                  m.name AS member_name, m.email AS member_email,
+                  z.zone_type
+             FROM parking_session ps
+             JOIN parking_slot sl USING (slot_id)
+             JOIN zone z USING (zone_id)
+             LEFT JOIN reservation r USING (reservation_id)
+             LEFT JOIN member m ON r.member_id = m.member_id
+            WHERE ps.exit_time IS NULL
+            ORDER BY ps.entry_time DESC""")
+    active_reservations = db.query(
+        """SELECT r.reservation_id, r.status, r.arrival_time, r.created_at, r.checkin_code,
+                  s.label AS slot_label, m.name, m.email, v.plate,
+                  r.arrival_time + make_interval(mins => %s::int) AS checkin_deadline
+             FROM reservation r
+             JOIN parking_slot s USING (slot_id)
+             JOIN member m USING (member_id)
+             JOIN vehicle v USING (vehicle_id)
+            WHERE r.status = 'BOOKED'
+            ORDER BY r.arrival_time ASC""",
+        (cfg["grace_minutes"],))
     return jsonify({"members": members, "recent": recent, "stats": stats,
-                    "config": rules.get_config(), "now": rules.get_now()["now"]})
+                    "parked": parked, "active_reservations": active_reservations,
+                    "config": cfg, "now": rules.get_now()["now"]})
 
 
 @api.post("/admin/members/<int:member_id>/unsuspend")
@@ -169,6 +194,44 @@ def admin_unsuspend(member_id):
                       WHERE member_id = %s AND status = 'ACTIVE'""", (member_id,))
         c.execute("UPDATE member SET status = 'ACTIVE' WHERE member_id = %s", (member_id,))
     return jsonify({"ok": True})
+
+
+@api.post("/admin/reservations/<int:reservation_id>/cancel")
+@auth.require_admin
+def admin_cancel_reservation(reservation_id):
+    return jsonify(rules.admin_cancel_reservation(reservation_id=reservation_id, admin_id=g.member["member_id"]))
+
+
+@api.post("/admin/reservations/force-cancel")
+@auth.require_admin
+def admin_force_cancel():
+    b = body()
+    res_id = b.get("reservation_id")
+    return jsonify(rules.admin_cancel_reservation(
+        reservation_id=int(res_id) if res_id else None,
+        code=b.get("code"),
+        slot_label=b.get("slot_label"),
+        admin_id=g.member["member_id"],
+    ))
+
+
+@api.post("/admin/sessions/<int:session_id>/exit")
+@auth.require_admin
+def admin_exit_session(session_id):
+    return jsonify(rules.admin_force_exit(session_id=session_id))
+
+
+@api.post("/admin/sessions/force-exit")
+@auth.require_admin
+def admin_force_exit():
+    b = body()
+    sess_id = b.get("session_id")
+    return jsonify(rules.admin_force_exit(
+        session_id=int(sess_id) if sess_id else None,
+        code=b.get("code"),
+        slot_label=b.get("slot_label"),
+    ))
+
 
 
 # ---- ค่าตั้งระบบ (ทุกการแก้ไขบันทึกลง config_history) ----

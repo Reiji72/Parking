@@ -341,25 +341,149 @@ async function renderAdmin(view) {
 
 async function adminOverview(body) {
   const d = await api('/admin/overview');
+  const parked = d.parked || [];
+  const activeRes = d.active_reservations || [];
   body.innerHTML = `
     <div class="grid cols-3">
       <div class="card"><div class="muted">รถจอดอยู่ตอนนี้</div><div class="stat">${d.stats.parked_now}</div></div>
       <div class="card"><div class="muted">การจองที่รอมาถึง</div><div class="stat">${d.stats.booked_now}</div></div>
       <div class="card"><div class="muted">บัญชีที่ถูกระงับ</div><div class="stat">${d.stats.suspended}</div></div>
     </div>
+
+    <section class="card" style="margin-top:1rem">
+      <h2>จัดการด่วนโดยผู้ดูแล (บังคับออก / บังคับยกเลิก)</h2>
+      <p class="muted">สำหรับกรณีฉุกเฉิน ปลดปล่อยช่องจอด หรือจัดการแทนผู้ใช้ที่ไม่สามารถทำรายการได้</p>
+      <div class="grid cols-2" style="margin-top:.75rem">
+        <form id="quickExitForm" class="stack" style="background:var(--bg);padding:.8rem;border-radius:8px">
+          <div>
+            <b>บังคับออกจากโรงจอด</b>
+            <div class="muted" style="font-size:.8rem">ระบุรหัสตั๋ว/จอง (R... หรือ W...) หรือชื่อช่องจอด (เช่น A1, B3)</div>
+          </div>
+          <div class="row">
+            <input name="target" placeholder="เช่น WA1B2 หรือ R9K2X หรือ A2" required style="flex:1">
+            <button class="btn danger sm" type="submit">🚪 บังคับออก</button>
+          </div>
+        </form>
+        <form id="quickCancelForm" class="stack" style="background:var(--bg);padding:.8rem;border-radius:8px">
+          <div>
+            <b>บังคับยกเลิกการจอง</b>
+            <div class="muted" style="font-size:.8rem">ระบุรหัสการจอง (R...) หรือชื่อช่องจอดที่จองอยู่</div>
+          </div>
+          <div class="row">
+            <input name="target" placeholder="เช่น R9K2X หรือ A2" required style="flex:1">
+            <button class="btn danger sm" type="submit">✕ บังคับยกเลิก</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:1rem">
+      <div class="row" style="justify-content:space-between">
+        <h2>รถที่กำลังจอดอยู่ในโรงจอด <span class="pill info">${parked.length} คัน</span></h2>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>ช่อง</th><th>ทะเบียน</th><th>ประเภท</th><th>สมาชิก / ผู้จอง</th><th>รหัสตั๋ว/จอง</th><th>เวลาเข้า</th><th>จัดการ</th></tr></thead><tbody>
+        ${parked.map((s) => `<tr>
+          <td><b class="mono" style="font-size:1.1rem">${esc(s.slot_label)}</b></td>
+          <td>${esc(s.plate || '-')}</td>
+          <td><span class="pill ${s.reservation_id ? 'info' : 'warn'}">${s.reservation_id ? 'จองล่วงหน้า' : 'Walk-in'}</span></td>
+          <td>${s.member_name ? `${esc(s.member_name)} <small>(${esc(s.member_email)})</small>` : '<span class="muted">- (Walk-in)</span>'}</td>
+          <td class="mono">${esc(s.ticket_code)}</td>
+          <td>${fmtDT(s.entry_time)}</td>
+          <td><button class="btn danger sm" data-force-exit-sess="${s.session_id}" data-slot="${esc(s.slot_label)}">🚪 บังคับออก</button></td>
+        </tr>`).join('') || '<tr><td colspan="7" class="muted">ไม่มีรถจอดอยู่ขณะนี้</td></tr>'}
+        </tbody></table></div>
+    </section>
+
+    <section class="card" style="margin-top:1rem">
+      <div class="row" style="justify-content:space-between">
+        <h2>การจองที่รอเข้าจอด (ยังไม่ Check-in) <span class="pill warn">${activeRes.length} รายการ</span></h2>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>ช่อง</th><th>สมาชิก</th><th>ทะเบียน</th><th>นัดมาถึง</th><th>เส้นตาย Check-in</th><th>รหัสจอง</th><th>จัดการ</th></tr></thead><tbody>
+        ${activeRes.map((r) => `<tr>
+          <td>${r.reservation_id}</td>
+          <td><b class="mono" style="font-size:1.1rem">${esc(r.slot_label)}</b></td>
+          <td>${esc(r.name)} <br><small class="muted">${esc(r.email)}</small></td>
+          <td>${esc(r.plate)}</td>
+          <td>${fmtDT(r.arrival_time)}</td>
+          <td><span class="muted">${fmtDT(r.checkin_deadline)}</span></td>
+          <td class="mono"><b>${esc(r.checkin_code)}</b></td>
+          <td><button class="btn danger sm" data-force-cancel-res="${r.reservation_id}" data-code="${esc(r.checkin_code)}">✕ บังคับยกเลิก</button></td>
+        </tr>`).join('') || '<tr><td colspan="8" class="muted">ไม่มีการจองที่รอเข้าจอดขณะนี้</td></tr>'}
+        </tbody></table></div>
+    </section>
+
     <section class="card" style="margin-top:1rem"><h2>สมาชิก</h2><div class="table-wrap"><table>
       <thead><tr><th>ชื่อ</th><th>อีเมล</th><th>ใบเหลือง</th><th>no-show</th><th>สถานะ</th><th></th></tr></thead><tbody>
       ${d.members.map((m) => `<tr><td>${esc(m.name)}</td><td>${esc(m.email)}</td><td>${m.yellow_active}</td><td>${m.noshow_active} <small>(สะสม ${m.noshow_total})</small></td>
         <td><span class="pill ${m.status === 'ACTIVE' ? 'ok' : 'bad'}">${m.status === 'ACTIVE' ? 'ปกติ' : 'ถูกระงับ'}</span></td>
         <td>${m.status === 'SUSPENDED' || m.yellow_active || m.noshow_active ? `<button class="btn sm" data-unsus="${m.member_id}">ปลดระงับ/ล้างโทษ</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">ยังไม่มีสมาชิก</td></tr>'}
       </tbody></table></div></section>
-    <section class="card" style="margin-top:1rem"><h2>การจองล่าสุด</h2><div class="table-wrap"><table>
-      <thead><tr><th>#</th><th>สมาชิก</th><th>รถ</th><th>ช่อง</th><th>มาถึง</th><th>รหัส</th><th>สถานะ</th></tr></thead><tbody>
-      ${d.recent.map((r) => `<tr><td>${r.reservation_id}</td><td>${esc(r.name)}</td><td>${esc(r.plate)}</td><td>${esc(r.slot_label)}</td><td>${fmtDT(r.arrival_time)}</td><td class="mono">${esc(r.checkin_code)}</td><td><span class="pill ${STATUS_TH[r.status][1]}">${STATUS_TH[r.status][0]}</span></td></tr>`).join('') || '<tr><td colspan="7" class="muted">ยังไม่มีการจอง</td></tr>'}
+
+    <section class="card" style="margin-top:1rem"><h2>ประวัติการจองล่าสุด</h2><div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>สมาชิก</th><th>รถ</th><th>ช่อง</th><th>มาถึง</th><th>รหัส</th><th>สถานะ</th><th>จัดการ</th></tr></thead><tbody>
+      ${d.recent.map((r) => `<tr>
+        <td>${r.reservation_id}</td><td>${esc(r.name)}</td><td>${esc(r.plate)}</td><td>${esc(r.slot_label)}</td>
+        <td>${fmtDT(r.arrival_time)}</td><td class="mono">${esc(r.checkin_code)}</td>
+        <td><span class="pill ${STATUS_TH[r.status][1]}">${STATUS_TH[r.status][0]}</span></td>
+        <td>${r.status === 'BOOKED' ? `<button class="btn danger sm" data-force-cancel-res="${r.reservation_id}" data-code="${esc(r.checkin_code)}">✕ ยกเลิก</button>` :
+              r.status === 'CHECKED_IN' ? `<button class="btn danger sm" data-force-exit-code="${esc(r.checkin_code)}">🚪 บังคับออก</button>` : '<span class="muted">-</span>'}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="muted">ยังไม่มีการจอง</td></tr>'}
       </tbody></table></div></section>`;
+
   $$('[data-unsus]', body).forEach((b) => b.addEventListener('click', async () => {
-    if (await act(() => api(`/admin/members/${b.dataset.unsus}/unsuspend`, { method: 'POST' }), 'ปลดระงับและล้างโทษแล้ว')) adminOverview(body);
+    if (await act(() => api(`/admin/members/${b.dataset.unsus}/unsuspend`, { method: 'POST' }), 'ปลดระงับและล้างโทษแล้ว')) {
+      await refreshCore();
+      adminOverview(body);
+    }
   }));
+
+  $$('[data-force-exit-sess]', body).forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm(`ยืนยันบังคับให้รถในช่อง ${b.dataset.slot || ''} ออกจากโรงจอดและเปิดช่องว่างทันที?`)) return;
+    if (await act(() => api(`/admin/sessions/${b.dataset.forceExitSess}/exit`, { method: 'POST' }), 'ยืนยันออกจากโรงจอดเรียบร้อย')) {
+      await refreshCore();
+      adminOverview(body);
+    }
+  }));
+
+  $$('[data-force-exit-code]', body).forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm(`ยืนยันบังคับให้รถรหัส ${b.dataset.forceExitCode} ออกจากโรงจอด?`)) return;
+    if (await act(() => api('/admin/sessions/force-exit', { method: 'POST', body: { code: b.dataset.forceExitCode } }), 'ยืนยันออกจากโรงจอดเรียบร้อย')) {
+      await refreshCore();
+      adminOverview(body);
+    }
+  }));
+
+  $$('[data-force-cancel-res]', body).forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm(`ยืนยันบังคับยกเลิกการจองรหัส ${b.dataset.code || ''} และเปิดช่องว่างทันที?`)) return;
+    if (await act(() => api(`/admin/reservations/${b.dataset.forceCancelRes}/cancel`, { method: 'POST' }), 'ยกเลิกการจองเรียบร้อย')) {
+      await refreshCore();
+      adminOverview(body);
+    }
+  }));
+
+  $('#quickExitForm')?.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const target = ev.target.target.value.trim();
+    if (!target) return;
+    if (!confirm(`ยืนยันบังคับออกจากโรงจอด (${target})?`)) return;
+    if (await act(() => api('/admin/sessions/force-exit', { method: 'POST', body: { code: target } }), 'ยืนยันออกจากโรงจอดเรียบร้อย')) {
+      await refreshCore();
+      adminOverview(body);
+    }
+  });
+
+  $('#quickCancelForm')?.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const target = ev.target.target.value.trim();
+    if (!target) return;
+    if (!confirm(`ยืนยันบังคับยกเลิกการจอง (${target})?`)) return;
+    if (await act(() => api('/admin/reservations/force-cancel', { method: 'POST', body: { code: target } }), 'ยกเลิกการจองเรียบร้อย')) {
+      await refreshCore();
+      adminOverview(body);
+    }
+  });
 }
 
 async function adminConfig(body) {

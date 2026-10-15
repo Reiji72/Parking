@@ -357,3 +357,135 @@ def member_overview(member_id):
     active = next((r for r in reservations if r["status"] in ("BOOKED", "CHECKED_IN")), None)
     return {"member": member, "vehicles": vehicles, "counts": counts, "limits": limits,
             "active": active, "reservations": reservations}
+
+
+# ---------- การจัดการของผู้ดูแลระบบ (บังคับยกเลิก / บังคับออก) ----------
+
+def admin_cancel_reservation(reservation_id=None, code=None, slot_label=None, admin_id=None):
+    """ผู้ดูแลระบบบังคับยกเลิกการจอง ปลดล็อกช่องจอดทันที (ไม่บันทึกโทษสมาชิก)"""
+    with db.tx() as c:
+        if reservation_id:
+            r = c.execute(
+                """SELECT r.*, s.label AS slot_label
+                     FROM reservation r
+                     JOIN parking_slot s USING (slot_id)
+                    WHERE r.reservation_id = %s FOR UPDATE OF r""",
+                (reservation_id,),
+            ).fetchone()
+        elif code:
+            clean = str(code).strip().upper()
+            r = c.execute(
+                """SELECT r.*, s.label AS slot_label
+                     FROM reservation r
+                     JOIN parking_slot s USING (slot_id)
+                    WHERE (r.checkin_code = %s OR s.label = %s) AND r.status = 'BOOKED'
+                    ORDER BY r.reservation_id DESC LIMIT 1
+                    FOR UPDATE OF r""",
+                (clean, clean),
+            ).fetchone()
+        elif slot_label:
+            clean = str(slot_label).strip().upper()
+            r = c.execute(
+                """SELECT r.*, s.label AS slot_label
+                     FROM reservation r
+                     JOIN parking_slot s USING (slot_id)
+                    WHERE s.label = %s AND r.status = 'BOOKED'
+                    ORDER BY r.reservation_id DESC LIMIT 1
+                    FOR UPDATE OF r""",
+                (clean,),
+            ).fetchone()
+        else:
+            raise AppError(400, "BAD_REQUEST", "กรุณาระบุ reservation_id, รหัสการจอง หรือชื่อช่องจอด")
+
+        if not r:
+            raise AppError(404, "NOT_FOUND", "ไม่พบการจองที่รอมาถึง (BOOKED)")
+        if r["status"] != "BOOKED":
+            msg = {
+                "CHECKED_IN": "รถเข้าจอดแล้ว ไม่สามารถยกเลิกการจองได้ (ให้ใช้ 'บังคับออกจากโรงจอด' แทน)",
+                "CANCELLED": "การจองนี้ถูกยกเลิกไปแล้ว",
+                "COMPLETED": "การจองนี้เสร็จสิ้นไปแล้ว",
+                "NO_SHOW": "การจองนี้ถูกนับเป็น no-show ไปแล้ว",
+            }.get(r["status"], f"ไม่สามารถยกเลิกได้ (สถานะ: {r['status']})")
+            raise AppError(409, "NOT_CANCELLABLE", msg)
+
+        lock_member(c, r["member_id"])
+        c.execute(
+            "UPDATE reservation SET status = 'CANCELLED', cancelled_at = app_now() WHERE reservation_id = %s",
+            (r["reservation_id"],),
+        )
+        return {
+            "ok": True,
+            "reservation_id": r["reservation_id"],
+            "checkin_code": r["checkin_code"],
+            "slot_label": r["slot_label"],
+            "message": f"บังคับยกเลิกการจอง {r['checkin_code']} (ช่อง {r['slot_label']}) สำเร็จ",
+        }
+
+
+def admin_force_exit(session_id=None, code=None, slot_label=None):
+    """ผู้ดูแลระบบบังคับยืนยันออกจากโรงจอด (รองรับ session_id, รหัสตั๋ว/จอง หรือชื่อช่องจอด)"""
+    with db.tx() as c:
+        if session_id:
+            s = c.execute(
+                """SELECT ps.*, sl.label AS slot_label, r.member_id
+                     FROM parking_session ps
+                     JOIN parking_slot sl USING (slot_id)
+                     LEFT JOIN reservation r USING (reservation_id)
+                    WHERE ps.session_id = %s AND ps.exit_time IS NULL
+                    FOR UPDATE OF ps""",
+                (session_id,),
+            ).fetchone()
+        elif code:
+            clean_code = str(code).strip().upper()
+            s = c.execute(
+                """SELECT ps.*, sl.label AS slot_label, r.member_id
+                     FROM parking_session ps
+                     JOIN parking_slot sl USING (slot_id)
+                     LEFT JOIN reservation r USING (reservation_id)
+                    WHERE (ps.ticket_code = %s OR sl.label = %s) AND ps.exit_time IS NULL
+                    FOR UPDATE OF ps""",
+                (clean_code, clean_code),
+            ).fetchone()
+        elif slot_label:
+            clean_label = str(slot_label).strip().upper()
+            s = c.execute(
+                """SELECT ps.*, sl.label AS slot_label, r.member_id
+                     FROM parking_session ps
+                     JOIN parking_slot sl USING (slot_id)
+                     LEFT JOIN reservation r USING (reservation_id)
+                    WHERE sl.label = %s AND ps.exit_time IS NULL
+                    FOR UPDATE OF ps""",
+                (clean_label,),
+            ).fetchone()
+        else:
+            raise AppError(400, "BAD_REQUEST", "กรุณาระบุ session_id, รหัสตั๋ว/การจอง หรือชื่อช่องจอด")
+
+        if not s:
+            raise AppError(404, "NOT_FOUND", "ไม่พบรถที่กำลังจอดอยู่ (อาจออกไปแล้ว)")
+
+        if s["member_id"]:
+            lock_member(c, s["member_id"])
+
+        c.execute("UPDATE parking_session SET exit_time = app_now() WHERE session_id = %s", (s["session_id"],))
+
+        cleared = 0
+        if s["reservation_id"]:
+            c.execute("UPDATE reservation SET status = 'COMPLETED' WHERE reservation_id = %s",
+                      (s["reservation_id"],))
+            cleared = c.execute(
+                """UPDATE penalty SET status = 'CLEARED', resolved_at = app_now()
+                    WHERE member_id = %s AND type = 'YELLOW' AND status = 'ACTIVE'""",
+                (s["member_id"],),
+            ).rowcount
+
+        return {
+            "ok": True,
+            "session_id": s["session_id"],
+            "ticket_code": s["ticket_code"],
+            "slot_label": s["slot_label"],
+            "plate": s["plate"],
+            "walk_in": not s["reservation_id"],
+            "yellow_cleared": cleared,
+            "message": f"บังคับยืนยันออกจากโรงจอดสำเร็จ (ช่อง {s['slot_label']})",
+        }
+

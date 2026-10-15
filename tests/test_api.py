@@ -204,6 +204,55 @@ class ParkingApiTest(unittest.TestCase):
         self.assertEqual(rep["ratio"]["reserved"], 12)
         self.assertEqual(rep["topNoShow"][0]["no_shows"], 1)
 
+    # ---------- การจัดการของผู้ดูแลระบบ (บังคับยกเลิก / บังคับออก) ----------
+    def test_admin_force_cancel(self):
+        status, res = self.reserve("demo1", 8, 30)
+        self.assertEqual(status, 201)
+        res_id = res["reservation_id"]
+        self.assertEqual(self.slot_state(8)["state"], "BOOKED")
+
+        # สมาชิกทั่วไปเรียกไม่ได้
+        self.assertEqual(call("POST", f"/api/admin/reservations/{res_id}/cancel", self.tok["demo2"])[0], 403)
+
+        # ผู้ดูแลระบบบังคับยกเลิก
+        status, body = call("POST", f"/api/admin/reservations/{res_id}/cancel", self.tok["admin"])
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+
+        # ช่องจอดว่างทันที และสมาชิกไม่มีใบเหลือง
+        self.assertEqual(self.slot_state(8)["state"], "FREE")
+        self.assertEqual(self.me("demo1")["counts"]["yellow_active"], 0)
+
+    def test_admin_force_exit_walkin_and_reservation(self):
+        # 1. Walk-in เข้าจอด
+        st, wi = call("POST", "/api/kiosk/walkin", body={"plate": "กข 1234"})
+        self.assertEqual(st, 201)
+        ticket = wi["ticket_code"]
+
+        # ผู้ดูแลดู overview ต้องเห็นรถใน parked
+        st, ov = call("GET", "/api/admin/overview", self.tok["admin"])
+        self.assertEqual(st, 200)
+        sess = next(s for s in ov["parked"] if s["ticket_code"] == ticket)
+
+        # สมาชิกทั่วไปสั่งออกไม่ได้
+        self.assertEqual(call("POST", f"/api/admin/sessions/{sess['session_id']}/exit", self.tok["demo1"])[0], 403)
+
+        # ผู้ดูแลบังคับออกด้วย session_id
+        st, out = call("POST", f"/api/admin/sessions/{sess['session_id']}/exit", self.tok["admin"])
+        self.assertEqual(st, 200)
+        self.assertTrue(out["ok"])
+
+        # 2. จองแล้ว check-in จากนั้นผู้ดูแลบังคับออกด้วยรหัส
+        _, res = self.reserve("demo1", 7, 10)
+        call("POST", "/api/kiosk/checkin", body={"code": res["checkin_code"]})
+        self.assertEqual(self.slot_state(7)["state"], "OCCUPIED")
+
+        st, out2 = call("POST", "/api/admin/sessions/force-exit", self.tok["admin"], {"code": res["checkin_code"]})
+        self.assertEqual(st, 200)
+        self.assertTrue(out2["ok"])
+        self.assertEqual(self.slot_state(7)["state"], "FREE")
+
 
 if __name__ == "__main__":
     unittest.main()
+
